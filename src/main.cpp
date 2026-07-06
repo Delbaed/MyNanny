@@ -17,6 +17,12 @@
 #error "Copy include/secrets.h.example to include/secrets.h and fill in your Wi-Fi/Firebase credentials"
 #endif
 
+// Set to 1, re-flash, and open the serial monitor to calibrate anchors: walk
+// to each anchor AP, stand exactly 1 metre away, and read off its BSSID +
+// RSSI here instead of doing trilateration math by hand. Set back to 0 (the
+// normal tracking mode) once include/anchors.h is filled in for real.
+#define CALIBRATION_MODE 0
+
 const int STATUS_LED_PIN = 1;
 const unsigned long SCAN_INTERVAL_MS = 3000;
 
@@ -135,6 +141,44 @@ void connectWiFi() {
   Serial.println(WiFi.localIP());
 }
 
+#if CALIBRATION_MODE
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.mode(WIFI_STA);
+  delay(500);
+  Serial.println("\nCalibration mode: stand 1m from the AP you're calibrating and read its line below.");
+}
+
+void loop() {
+  int n = WiFi.scanNetworks();
+
+  // Sort strongest-first so the AP you're standing next to is easy to spot.
+  int order[64];
+  int count = n < 64 ? n : 64;
+  for (int i = 0; i < count; i++) order[i] = i;
+  for (int i = 0; i < count; i++) {
+    for (int j = i + 1; j < count; j++) {
+      if (WiFi.RSSI(order[j]) > WiFi.RSSI(order[i])) {
+        int tmp = order[i];
+        order[i] = order[j];
+        order[j] = tmp;
+      }
+    }
+  }
+
+  Serial.println("---");
+  for (int i = 0; i < count; i++) {
+    int idx = order[i];
+    Serial.printf("SSID=%-20s BSSID=%s RSSI=%d\n", WiFi.SSID(idx).c_str(), WiFi.BSSIDstr(idx).c_str(), WiFi.RSSI(idx));
+  }
+  WiFi.scanDelete();
+
+  delay(2000);
+}
+
+#else
+
 void setup() {
   Serial.begin(115200);
   pinMode(STATUS_LED_PIN, OUTPUT);
@@ -160,3 +204,5 @@ void loop() {
     Serial.printf("located=%d anchorsSeen=%d x=%.2f y=%.2f\n", located, anchorsSeen, x, y);
   }
 }
+
+#endif

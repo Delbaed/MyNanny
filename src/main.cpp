@@ -32,6 +32,45 @@ unsigned long lastScanAt = 0;
 // replace this with a real reading. -1 means "unknown" to the app.
 int readBatteryPercent() { return -1; }
 
+// database.rules.json only allows writes from one pinned Firebase Auth
+// identity. FIREBASE_REFRESH_TOKEN proves "I am that identity" but never
+// goes over the wire itself — it's exchanged here for a short-lived ID
+// token, which is what actually gets sent with each database write.
+String cachedIdToken;
+unsigned long idTokenExpiresAtMs = 0;
+
+bool refreshIdToken() {
+  if (WiFi.status() != WL_CONNECTED) return false;
+
+  HTTPClient http;
+  http.begin("https://securetoken.googleapis.com/v1/token?key=" + String(FIREBASE_API_KEY));
+  http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+
+  String body = "grant_type=refresh_token&refresh_token=" + String(FIREBASE_REFRESH_TOKEN);
+  int status = http.POST(body);
+
+  if (status != 200) {
+    Serial.printf("Token refresh failed, HTTP %d\n", status);
+    http.end();
+    return false;
+  }
+
+  JsonDocument doc;
+  deserializeJson(doc, http.getStream());
+  http.end();
+
+  cachedIdToken = doc["id_token"].as<String>();
+  long expiresInSeconds = doc["expires_in"].as<String>().toInt();
+  // Refresh a bit early so we're never caught with an expired token mid-push.
+  idTokenExpiresAtMs = millis() + (expiresInSeconds > 60 ? (expiresInSeconds - 60) * 1000UL : 0);
+  return cachedIdToken.length() > 0;
+}
+
+bool ensureFreshIdToken() {
+  if (cachedIdToken.length() > 0 && millis() < idTokenExpiresAtMs) return true;
+  return refreshIdToken();
+}
+
 float rssiToDistance(int rssi, int txPowerAt1m) {
   return pow(10.0f, (txPowerAt1m - rssi) / (10.0f * PATH_LOSS_EXPONENT));
 }
@@ -96,12 +135,13 @@ bool locateChild(float &outX, float &outY, int &outAnchorsSeen) {
 
 void pushLocation(bool located, float x, float y, int anchorsSeen) {
   if (WiFi.status() != WL_CONNECTED) return;
+  if (!ensureFreshIdToken()) {
+    Serial.println("Skipping push: no valid auth token");
+    return;
+  }
 
   HTTPClient http;
-  String url = "https://" + String(FIREBASE_HOST) + "/robots/" + DEVICE_ID + "/location.json";
-  if (strlen(FIREBASE_AUTH) > 0) {
-    url += "?auth=" + String(FIREBASE_AUTH);
-  }
+  String url = "https://" + String(FIREBASE_HOST) + "/robots/" + DEVICE_ID + "/location.json?auth=" + cachedIdToken;
 
   JsonDocument doc;
   doc["online"] = true;

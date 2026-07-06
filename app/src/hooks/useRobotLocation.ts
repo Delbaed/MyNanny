@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { onValue, ref } from 'firebase/database';
-import { db } from '../config/firebase';
+import { authReady, db } from '../config/firebase';
 import { RobotLocation } from '../types/robot';
 import { STALE_AFTER_MS } from '../config/constants';
 
@@ -19,19 +19,29 @@ export function useRobotLocation(deviceId: string): RobotLocationState {
 
   useEffect(() => {
     setLoading(true);
-    const locationRef = ref(db, `robots/${deviceId}/location`);
-    const unsubscribe = onValue(
-      locationRef,
-      (snapshot) => {
-        setLocation(snapshot.val());
-        setLoading(false);
-        setError(null);
-      },
-      (err) => {
+    let unsubscribe = () => {};
+
+    authReady
+      .then(() => {
+        const locationRef = ref(db, `robots/${deviceId}/location`);
+        unsubscribe = onValue(
+          locationRef,
+          (snapshot) => {
+            setLocation(snapshot.val());
+            setLoading(false);
+            setError(null);
+          },
+          (err) => {
+            setError(err.message);
+            setLoading(false);
+          }
+        );
+      })
+      .catch((err) => {
         setError(err.message);
         setLoading(false);
-      }
-    );
+      });
+
     return () => unsubscribe();
   }, [deviceId]);
 

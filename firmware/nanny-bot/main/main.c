@@ -32,8 +32,8 @@
  * certified biometric gait model.
  */
 
-#define WIFI_SSID "YOUR_WIFI_NAME"
-#define WIFI_PASS "YOUR_WIFI_PASSWORD"
+#define WIFI_SSID "Dogpatch"
+#define WIFI_PASS "Community25!"
 
 #define CSI_BINS 16
 #define ROOM_BASELINE_FRAMES 180
@@ -381,7 +381,7 @@ static void csi_rx_cb(void *ctx, wifi_csi_info_t *info) {
     xQueueSend(csi_queue, &f, 0);
 }
 
-static void enable_csi(void) {
+static bool enable_csi(void) {
     wifi_ap_record_t ap_info = {0};
     ESP_ERROR_CHECK(esp_wifi_sta_get_ap_info(&ap_info));
     memcpy(ap_bssid, ap_info.bssid, sizeof(ap_bssid));
@@ -400,12 +400,12 @@ static void enable_csi(void) {
         .enable = 1,
         .acquire_csi_legacy = 1,
         .acquire_csi_ht20 = 1,
-        .acquire_csi_ht40 = 1,
-        .acquire_csi_su = 1,
-        .acquire_csi_mu = 1,
-        .acquire_csi_dcm = 1,
-        .acquire_csi_beamformed = 1,
-        .acquire_csi_he_stbc = ESP_CSI_ACQUIRE_STBC_SAMPLE_HELTFS,
+        .acquire_csi_ht40 = 0,
+        .acquire_csi_su = 0,
+        .acquire_csi_mu = 0,
+        .acquire_csi_dcm = 0,
+        .acquire_csi_beamformed = 0,
+        .acquire_csi_he_stbc = ESP_CSI_ACQUIRE_STBC_HELTF1,
         .val_scale_cfg = 0,
         .dump_ack_en = 0,
 #else
@@ -419,10 +419,31 @@ static void enable_csi(void) {
 #endif
     };
 
-    ESP_ERROR_CHECK(esp_wifi_set_promiscuous(true));
-    ESP_ERROR_CHECK(esp_wifi_set_csi_rx_cb(csi_rx_cb, NULL));
-    ESP_ERROR_CHECK(esp_wifi_set_csi_config(&csi_config));
-    ESP_ERROR_CHECK(esp_wifi_set_csi(true));
+    esp_err_t err = esp_wifi_set_promiscuous(true);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Could not enable promiscuous mode: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    err = esp_wifi_set_csi_rx_cb(csi_rx_cb, NULL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Could not set CSI callback: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    err = esp_wifi_set_csi_config(&csi_config);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "CSI config rejected (%s); trying driver defaults", esp_err_to_name(err));
+    }
+
+    err = esp_wifi_set_csi(true);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Could not enable CSI: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    ESP_LOGI(TAG, "CSI enabled");
+    return true;
 }
 
 static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data) {
@@ -500,8 +521,7 @@ static void init_wifi(void) {
         pdMS_TO_TICKS(20000));
 
     if (bits & WIFI_CONNECTED_BIT) {
-        enable_csi();
-        csi_ready = true;
+        csi_ready = enable_csi();
     } else {
         ESP_LOGW(TAG, "WiFi did not connect in 20 seconds; serial motor commands still work.");
         ESP_LOGW(TAG, "Edit WIFI_SSID and WIFI_PASS, then flash again for CSI following.");

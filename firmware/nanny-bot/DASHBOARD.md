@@ -14,7 +14,9 @@ Then open:
 http://127.0.0.1:8080
 ```
 
-The app shows live room baseline progress, child imprint progress, active movement triggers, and serial logs. It also has buttons for full imprinting, status refresh, room-only baseline, child imprint, and basic motor tests.
+The app shows live room baseline progress, child imprint progress, active movement triggers, serial logs, and a browser-based GPS safe-zone panel. It also has buttons for full imprinting, status refresh, room-only baseline, child imprint, and basic motor tests.
+
+The GPS panel uses the browser/device location from the laptop or phone running the app. The ESP32 does not have true GPS unless a GPS module is added.
 
 Keep the Windows hotspot named `Dogpatch` running on 2.4 GHz. The ESP32 connects to that WiFi, CSI is enabled in the firmware, and the app reads the ESP32's USB serial data.
 

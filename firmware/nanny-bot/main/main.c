@@ -1,6 +1,7 @@
 #include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "driver/gpio.h"
@@ -201,6 +202,25 @@ static const char *mode_name(system_mode_t current_mode) {
     }
 }
 
+static void emit_appdata(const char *event) {
+    printf(
+        "APPDATA {\"event\":\"%s\",\"mode\":\"%s\",\"baselineReady\":%d,"
+        "\"gaitReady\":%d,\"roomFrames\":%d,\"roomTotal\":%d,"
+        "\"gaitFrames\":%d,\"gaitTotal\":%d,\"gaitSamples\":%d,"
+        "\"activeTriggers\":%d}\n",
+        event,
+        mode_name(mode),
+        baseline_ready,
+        gait_ready,
+        room_frames,
+        ROOM_BASELINE_FRAMES,
+        gait_frames,
+        GAIT_ENROLL_FRAMES,
+        gait_sample_count,
+        active_trigger_count
+    );
+}
+
 static void motors_stop(void) {
     gpio_set_level(LEFT_A, 0);
     gpio_set_level(LEFT_B, 0);
@@ -262,6 +282,7 @@ static void start_room_onboarding(bool also_relearn_gait) {
     mode = MODE_ROOM_BASELINE;
     ignore_until_us = 0;
     ESP_LOGI(TAG, "ONBOARDING 1/2: keep robot still; learning normal room WiFi baseline");
+    emit_appdata("room-baseline-start");
 }
 
 static void start_gait_onboarding(void) {
@@ -277,6 +298,7 @@ static void start_gait_onboarding(void) {
     ignore_until_us = 0;
     ESP_LOGI(TAG, "ONBOARDING 2/2: have the child move/walk alone near the bot");
     ESP_LOGI(TAG, "Collecting gait-like WiFi CSI movement profile");
+    emit_appdata("gait-enroll-start");
 }
 
 static void enter_active_mode(void) {
@@ -290,6 +312,7 @@ static void enter_active_mode(void) {
              gait_motion_std,
              gait_change_mean,
              gait_change_std);
+    emit_appdata("active-start");
     pulse_alert(2);
 }
 
@@ -302,6 +325,7 @@ static void print_status(void) {
              room_frames,
              gait_frames,
              gait_sample_count);
+    emit_appdata("status");
     ESP_LOGI(TAG,
              "gaitProfile motion=%.3f+/-%.3f change=%.3f+/-%.3f",
              gait_motion_mean,
@@ -571,6 +595,7 @@ static void learn_room_baseline(const csi_feature_t *f) {
     }
     room_frames++;
     ESP_LOGI(TAG, "Onboarding room baseline %d/%d", room_frames, ROOM_BASELINE_FRAMES);
+    emit_appdata("room-baseline-progress");
 
     if (room_frames >= ROOM_BASELINE_FRAMES) {
         for (int i = 0; i < CSI_BINS; i++) {
@@ -579,6 +604,7 @@ static void learn_room_baseline(const csi_feature_t *f) {
         normalize(baseline);
         baseline_ready = true;
         ESP_LOGI(TAG, "Room baseline learned in RAM");
+        emit_appdata("room-baseline-complete");
 
         if (require_gait_after_baseline || !gait_ready) {
             start_gait_onboarding();
@@ -611,6 +637,7 @@ static void learn_gait_profile(const csi_feature_t *f) {
              gait_sample_count,
              f->motion,
              baseline_distance);
+    emit_appdata("gait-enroll-progress");
 
     if (gait_frames >= GAIT_ENROLL_FRAMES) {
         if (gait_sample_count < MIN_GAIT_SAMPLES) {
@@ -631,6 +658,7 @@ static void learn_gait_profile(const csi_feature_t *f) {
         gait_ready = true;
 
         ESP_LOGI(TAG, "Child movement/gait profile learned in RAM");
+        emit_appdata("gait-enroll-complete");
         enter_active_mode();
     }
 }
@@ -673,6 +701,7 @@ static void active_follow_logic(const csi_feature_t *f) {
     if (active_child_like_frames >= TRIGGER_FRAMES) {
         active_child_like_frames = 0;
         active_trigger_count++;
+        emit_appdata("movement-trigger");
         movement_burst(active_trigger_count);
     } else {
         motors_stop();

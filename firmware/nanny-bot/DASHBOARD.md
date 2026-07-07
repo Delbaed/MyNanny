@@ -1,6 +1,6 @@
-# MyNanny Serial Dashboard
+# MyNanny Control App
 
-The ESP32 firmware prints live onboarding and movement data as `APPDATA` JSON lines over USB serial.
+The ESP32 firmware prints live onboarding and movement data as `APPDATA` JSON lines over USB serial. The local app reads those lines and can also send serial commands back to the ESP32.
 
 Run the local dashboard from the repo root:
 
@@ -14,6 +14,8 @@ Then open:
 http://127.0.0.1:8080
 ```
 
-Keep the Windows hotspot named `Dogpatch` running on 2.4 GHz. The ESP32 connects to that WiFi, CSI is enabled in the firmware, and the dashboard reads the ESP32's USB serial data.
+The app shows live room baseline progress, child imprint progress, active movement triggers, and serial logs. It also has buttons for full imprinting, status refresh, room-only baseline, child imprint, and basic motor tests.
+
+Keep the Windows hotspot named `Dogpatch` running on 2.4 GHz. The ESP32 connects to that WiFi, CSI is enabled in the firmware, and the app reads the ESP32's USB serial data.
 
 Opening the serial connection can restart the ESP32, so onboarding may begin again when the dashboard starts.

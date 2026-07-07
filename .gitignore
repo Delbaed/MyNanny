@@ -6,3 +6,7 @@
 include/secrets.h
 firebase-debug.log
 .firebase/
+firmware/nanny-bot/build/
+firmware/nanny-bot/sdkconfig
+firmware/nanny-bot/sdkconfig.old
+firmware/nanny-bot/eim_config.toml

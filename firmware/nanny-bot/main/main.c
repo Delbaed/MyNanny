@@ -71,11 +71,15 @@
 #define ALERT_PIN GPIO_NUM_10
 
 // Tune these by watching Serial Monitor.
-#define CHANGE_THRESHOLD 0.030f
-#define MOTION_THRESHOLD 0.016f
+#define CHANGE_THRESHOLD 0.006f
+#define MOTION_THRESHOLD 0.004f
 #define MIN_GAIT_SAMPLE_MOTION 0.003f
 #define MIN_GAIT_SAMPLE_CHANGE 0.006f
-#define TRIGGER_FRAMES 4
+#define TRIGGER_FRAMES 2
+
+// Demo mode for the one-ESP32 prototype: after imprinting, react to any
+// clear CSI movement instead of requiring a strict gait-shape match.
+#define DEMO_FOLLOW_ANY_SIGNIFICANT 1
 
 // Prototype fall alert: sudden CSI disturbance after child imprinting.
 #define FALL_CHANGE_THRESHOLD 0.055f
@@ -902,10 +906,16 @@ static void active_follow_logic(const csi_feature_t *f) {
 
     float baseline_distance = vec_distance(f->bins, baseline);
     bool significant_change = baseline_distance > CHANGE_THRESHOLD || f->motion > MOTION_THRESHOLD;
-    bool gait_like = significant_change && looks_like_enrolled_gait(
+    bool gait_like = significant_change && (
+#if DEMO_FOLLOW_ANY_SIGNIFICANT
+        true
+#else
+        looks_like_enrolled_gait(
         baseline_distance,
         f->motion,
         f->bins
+        )
+#endif
     );
     bool fall_like = significant_change && looks_like_possible_fall(baseline_distance, f->motion);
 

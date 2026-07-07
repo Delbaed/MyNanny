@@ -6,6 +6,7 @@
 include/secrets.h
 firebase-debug.log
 .firebase/
+app/expo-start*.log
 firmware/nanny-bot/build/
 firmware/nanny-bot/sdkconfig
 firmware/nanny-bot/sdkconfig.old

@@ -5,6 +5,7 @@ import queue
 import re
 import threading
 import time
+from urllib.parse import urlparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import serial
@@ -101,6 +102,44 @@ def pct(value, total):
         return max(0, min(100, round((int(value) / total) * 100)))
     except Exception:
         return 0
+
+
+def robot_location_payload(snapshot):
+    location = snapshot.get("location") or {}
+    room_total = max(1, int(snapshot.get("roomTotal") or 90))
+    gait_total = max(1, int(snapshot.get("gaitTotal") or 140))
+    room_frames = int(snapshot.get("roomFrames") or 0)
+    gait_frames = int(snapshot.get("gaitFrames") or 0)
+
+    # The one-ESP32 CSI prototype does not know true x/y position. These
+    # coordinates keep the existing app UI alive while surfacing real state.
+    x = 2.5
+    y = 2.5
+    if location.get("distanceFromHomeM") is not None:
+        try:
+            x = min(5.0, max(0.0, 2.5 + (float(location["distanceFromHomeM"]) / 10.0)))
+        except (TypeError, ValueError):
+            x = 2.5
+
+    return {
+        "online": bool(snapshot.get("connected")),
+        "located": bool(snapshot.get("connected")),
+        "x": x,
+        "y": y,
+        "anchorsSeen": 1 if snapshot.get("connected") else 0,
+        "batteryPercent": -1,
+        "updatedAt": int(snapshot.get("lastUpdate") or time.time()) * 1000,
+        "mode": snapshot.get("mode", "unknown"),
+        "event": snapshot.get("event", ""),
+        "roomFrames": room_frames,
+        "roomTotal": room_total,
+        "gaitFrames": gait_frames,
+        "gaitTotal": gait_total,
+        "gaitSamples": int(snapshot.get("gaitSamples") or 0),
+        "activeTriggers": int(snapshot.get("activeTriggers") or 0),
+        "fallAlerts": int(snapshot.get("fallAlerts") or 0),
+        "lastLine": snapshot.get("lastLine", ""),
+    }
 
 
 APP_HTML = """<!doctype html>
@@ -697,6 +736,12 @@ class Handler(BaseHTTPRequestHandler):
         with state_lock:
             snapshot = dict(state)
 
+        path = urlparse(self.path).path
+
+        if path == "/api/robot-location":
+            self.send_json(200, robot_location_payload(snapshot))
+            return
+
         if self.path == "/api/state":
             self.send_json(200, snapshot)
             return
@@ -771,9 +816,19 @@ class Handler(BaseHTTPRequestHandler):
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
 
     def log_message(self, fmt, *args):
         return

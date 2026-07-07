@@ -6,6 +6,16 @@ export interface RobotLocation {
   anchorsSeen: number;
   batteryPercent: number;
   updatedAt: number; // server epoch ms
+  mode?: string;
+  event?: string;
+  roomFrames?: number;
+  roomTotal?: number;
+  gaitFrames?: number;
+  gaitTotal?: number;
+  gaitSamples?: number;
+  activeTriggers?: number;
+  fallAlerts?: number;
+  lastLine?: string;
 }
 
 export interface SafeZone {

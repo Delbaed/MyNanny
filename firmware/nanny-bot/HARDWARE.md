@@ -2,7 +2,7 @@
 
 From the photo, you have:
 
-- ESP32 dev board on a breadboard
+- ESP32-C6 dev board on a breadboard
 - L298N-style red motor driver module
 - two yellow TT DC motors with wheels
 - battery holder for the motors
@@ -11,7 +11,7 @@ From the photo, you have:
 
 ## Power
 
-Keep the ESP32 powered from USB while testing.
+Keep the ESP32-C6 powered from USB while testing.
 
 Wire the motor battery pack to the L298N:
 
@@ -19,12 +19,12 @@ Wire the motor battery pack to the L298N:
 |---|---|
 | battery `+` | L298N `+12V` / `VIN` motor power screw terminal |
 | battery `-` | L298N `GND` screw terminal |
-| ESP32 `GND` | same L298N `GND` terminal |
+| ESP32-C6 `GND` | same L298N `GND` terminal |
 
 The shared ground is required. Without it, the ESP32 control pins and motor
 driver do not agree on what HIGH/LOW means.
 
-Do not connect the motors directly to ESP32 pins.
+Do not connect the motors directly to ESP32-C6 pins.
 
 ## Motors
 
@@ -35,16 +35,16 @@ Do not connect the motors directly to ESP32 pins.
 
 If a wheel spins backward during the motor test, swap that motor's two wires.
 
-## ESP32 To L298N Control Pins
+## ESP32-C6 To L298N Control Pins
 
 The current code uses four direction pins:
 
-| ESP32 Pin | L298N Pin |
+| ESP32-C6 Pin | L298N Pin |
 |---|---|
-| `GPIO25` | `IN1` |
-| `GPIO26` | `IN2` |
-| `GPIO27` | `IN3` |
-| `GPIO14` | `IN4` |
+| `GPIO4` | `IN1` |
+| `GPIO5` | `IN2` |
+| `GPIO6` | `IN3` |
+| `GPIO7` | `IN4` |
 
 If your L298N has `ENA` and `ENB` jumpers, leave the jumpers installed. If the
 jumpers are missing, the motors may not spin. Put the jumpers back on, or wire

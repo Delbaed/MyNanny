@@ -3,3 +3,7 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+firmware/nanny-bot/build/
+firmware/nanny-bot/sdkconfig
+firmware/nanny-bot/sdkconfig.old
+firmware/nanny-bot/eim_config.toml

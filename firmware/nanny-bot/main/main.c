@@ -41,13 +41,13 @@
 #define MIN_GAIT_SAMPLES 45
 
 // Motor-driver pins. Use a TB6612FNG/L298N/etc. Do not connect motors directly.
-#define LEFT_A GPIO_NUM_25
-#define LEFT_B GPIO_NUM_26
-#define RIGHT_A GPIO_NUM_27
-#define RIGHT_B GPIO_NUM_14
+#define LEFT_A GPIO_NUM_4
+#define LEFT_B GPIO_NUM_5
+#define RIGHT_A GPIO_NUM_6
+#define RIGHT_B GPIO_NUM_7
 
 // Optional LED/buzzer pin.
-#define ALERT_PIN GPIO_NUM_13
+#define ALERT_PIN GPIO_NUM_10
 
 // Tune these by watching Serial Monitor.
 #define CHANGE_THRESHOLD 0.060f
@@ -105,6 +105,7 @@ typedef enum {
 
 static EventGroupHandle_t wifi_events;
 static QueueHandle_t csi_queue;
+static bool csi_ready = false;
 
 static uint8_t ap_bssid[6];
 static bool have_ap_bssid = false;
@@ -395,6 +396,19 @@ static void enable_csi(void) {
              ap_info.rssi);
 
     wifi_csi_config_t csi_config = {
+#if CONFIG_SOC_WIFI_HE_SUPPORT
+        .enable = 1,
+        .acquire_csi_legacy = 1,
+        .acquire_csi_ht20 = 1,
+        .acquire_csi_ht40 = 1,
+        .acquire_csi_su = 1,
+        .acquire_csi_mu = 1,
+        .acquire_csi_dcm = 1,
+        .acquire_csi_beamformed = 1,
+        .acquire_csi_he_stbc = ESP_CSI_ACQUIRE_STBC_SAMPLE_HELTFS,
+        .val_scale_cfg = 0,
+        .dump_ack_en = 0,
+#else
         .lltf_en = true,
         .htltf_en = true,
         .stbc_htltf2_en = true,
@@ -402,6 +416,7 @@ static void enable_csi(void) {
         .channel_filter_en = false,
         .manu_scale = false,
         .shift = 0,
+#endif
     };
 
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous(true));
@@ -477,8 +492,20 @@ static void init_wifi(void) {
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    xEventGroupWaitBits(wifi_events, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
-    enable_csi();
+    EventBits_t bits = xEventGroupWaitBits(
+        wifi_events,
+        WIFI_CONNECTED_BIT,
+        pdFALSE,
+        pdTRUE,
+        pdMS_TO_TICKS(20000));
+
+    if (bits & WIFI_CONNECTED_BIT) {
+        enable_csi();
+        csi_ready = true;
+    } else {
+        ESP_LOGW(TAG, "WiFi did not connect in 20 seconds; serial motor commands still work.");
+        ESP_LOGW(TAG, "Edit WIFI_SSID and WIFI_PASS, then flash again for CSI following.");
+    }
 }
 
 static bool looks_like_enrolled_gait(float baseline_distance, float motion, const float *bins) {
@@ -709,12 +736,17 @@ void app_main(void) {
         return;
     }
 
-    ESP_LOGI(TAG, "One ESP32 onboarding gait mover");
+    ESP_LOGI(TAG, "One ESP32-C6 onboarding gait mover");
     ESP_LOGI(TAG, "This learns room CSI, then child-only movement CSI, then reacts.");
 
-    init_wifi();
-    start_room_onboarding(true);
-
-    xTaskCreate(gait_mover_task, "gait_mover_task", 8192, NULL, 5, NULL);
     xTaskCreate(serial_command_task, "serial_command_task", 4096, NULL, 3, NULL);
+
+    init_wifi();
+
+    if (csi_ready) {
+        start_room_onboarding(true);
+        xTaskCreate(gait_mover_task, "gait_mover_task", 8192, NULL, 5, NULL);
+    } else {
+        ESP_LOGW(TAG, "CSI task not started because WiFi is not connected.");
+    }
 }

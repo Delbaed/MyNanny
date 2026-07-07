@@ -1,10 +1,10 @@
-# One-ESP32 Onboarding Gait Mover
+# One-ESP32-C6 Onboarding Gait Mover
 
 This version adds onboarding and recalibration.
 
 It still uses:
 
-- one ESP32 on the robot
+- one ESP32-C6 on the robot
 - no child phone hotspot
 - no second ESP32
 - no camera
@@ -20,7 +20,7 @@ The learned profile is RAM-only. It is not saved to NVS or flash.
 
 ## Important Limit
 
-This is not true identity recognition. With one ESP32 and no wearable signal,
+This is not true identity recognition. With one ESP32-C6 and no wearable signal,
 the bot cannot prove a movement came from the child. It learns a room-specific
 WiFi disturbance pattern that can look like the child's movement.
 
@@ -45,7 +45,7 @@ Edit WiFi credentials in `main/main.c`:
 Build and flash:
 
 ```powershell
-idf.py set-target esp32
+idf.py set-target esp32c6
 idf.py build flash monitor
 ```
 
@@ -102,11 +102,11 @@ For the parts in your photo, use this wiring guide:
 
 Default pins:
 
-- `GPIO25`, `GPIO26`: left motor direction
-- `GPIO27`, `GPIO14`: right motor direction
-- `GPIO13`: optional LED/buzzer
+- `GPIO4`, `GPIO5`: left motor direction
+- `GPIO6`, `GPIO7`: right motor direction
+- `GPIO10`: optional LED/buzzer
 
-Do not connect motors directly to ESP32 GPIO pins.
+Do not connect motors directly to ESP32-C6 GPIO pins.
 
 ## Motor Test Commands
 

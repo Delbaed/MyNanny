@@ -42,10 +42,10 @@
 #define MIN_GAIT_SAMPLES 4
 
 // Motor-driver pins. Use a TB6612FNG/L298N/etc. Do not connect motors directly.
-#define LEFT_A GPIO_NUM_4
-#define LEFT_B GPIO_NUM_5
-#define RIGHT_A GPIO_NUM_6
-#define RIGHT_B GPIO_NUM_7
+#define LEFT_A GPIO_NUM_5
+#define LEFT_B GPIO_NUM_18
+#define RIGHT_A GPIO_NUM_20
+#define RIGHT_B GPIO_NUM_21
 
 // Optional LED/buzzer pin.
 #define ALERT_PIN GPIO_NUM_10

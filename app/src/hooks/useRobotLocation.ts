@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { onValue, ref } from 'firebase/database';
-import { authReady, db } from '../config/firebase';
+import { authReady, db, firebaseConfigured } from '../config/firebase';
 import { RobotLocation } from '../types/robot';
 import { STALE_AFTER_MS } from '../config/constants';
 
@@ -19,11 +19,42 @@ export function useRobotLocation(deviceId: string): RobotLocationState {
 
   useEffect(() => {
     setLoading(true);
+    let stopped = false;
     let unsubscribe = () => {};
+    let interval: ReturnType<typeof setInterval> | null = null;
 
-    authReady
+    const bridgeUrl =
+      process.env.EXPO_PUBLIC_LOCAL_BRIDGE_URL || 'http://127.0.0.1:8080/api/robot-location';
+
+    const readLocalBridge = async () => {
+      const response = await fetch(bridgeUrl);
+      if (!response.ok) {
+        throw new Error(`Local bridge returned ${response.status}`);
+      }
+      const next = (await response.json()) as RobotLocation;
+      if (!stopped) {
+        setLocation(next);
+        setLoading(false);
+        setError(null);
+      }
+    };
+
+    readLocalBridge()
       .then(() => {
-        const locationRef = ref(db, `robots/${deviceId}/location`);
+        interval = setInterval(readLocalBridge, 1000);
+      })
+      .catch(() => {
+        if (!firebaseConfigured || !db) {
+          if (!stopped) {
+            setError('Local ESP32 bridge is not running at http://127.0.0.1:8080.');
+            setLoading(false);
+          }
+          return;
+        }
+
+        const firebaseDb = db;
+        authReady.then(() => {
+        const locationRef = ref(firebaseDb, `robots/${deviceId}/location`);
         unsubscribe = onValue(
           locationRef,
           (snapshot) => {
@@ -41,8 +72,13 @@ export function useRobotLocation(deviceId: string): RobotLocationState {
         setError(err.message);
         setLoading(false);
       });
+      });
 
-    return () => unsubscribe();
+    return () => {
+      stopped = true;
+      if (interval) clearInterval(interval);
+      unsubscribe();
+    };
   }, [deviceId]);
 
   // Re-evaluate staleness even if no new update arrives, so a frozen robot

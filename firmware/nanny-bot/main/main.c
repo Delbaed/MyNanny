@@ -236,7 +236,15 @@ static const char *mode_name(system_mode_t current_mode) {
     }
 }
 
+#if HAVE_FIREBASE_SECRETS
+static char last_event[32] = "boot";
+#endif
+
 static void emit_appdata(const char *event) {
+#if HAVE_FIREBASE_SECRETS
+    strncpy(last_event, event, sizeof(last_event) - 1);
+    last_event[sizeof(last_event) - 1] = '\0';
+#endif
     printf(
         "APPDATA {\"event\":\"%s\",\"mode\":\"%s\",\"baselineReady\":%d,"
         "\"gaitReady\":%d,\"roomFrames\":%d,\"roomTotal\":%d,"
@@ -672,15 +680,18 @@ static bool ensure_fresh_id_token(void) {
 }
 
 // PATCHes (partial update, not overwrite) robots/<DEVICE_ID>/status.json so
-// concurrent callers (periodic status vs. an immediate fall-alert ping)
-// never clobber each other's fields.
-static bool firebase_patch_status(const char *json_body) {
+// concurrent callers (periodic push vs. an immediate one right after a fall
+// alert) never clobber each other's fields. Writes to the same
+// robots/<DEVICE_ID>/location node the phone app already reads (with a
+// Firebase fallback when its local USB-serial bridge isn't reachable) —
+// see app/src/hooks/useRobotLocation.ts and app/src/types/robot.ts.
+static bool firebase_patch_location(const char *json_body) {
     if (!ensure_fresh_id_token()) {
         return false;
     }
 
     char url[1700];
-    snprintf(url, sizeof(url), "https://%s/robots/%s/status.json?auth=%s", FIREBASE_HOST, DEVICE_ID, cached_id_token);
+    snprintf(url, sizeof(url), "https://%s/robots/%s/location.json?auth=%s", FIREBASE_HOST, DEVICE_ID, cached_id_token);
 
     esp_http_client_config_t config = {
         .url = url,
@@ -697,19 +708,25 @@ static bool firebase_patch_status(const char *json_body) {
     esp_http_client_set_post_field(client, json_body, (int)strlen(json_body));
     esp_err_t err = esp_http_client_perform(client);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Firebase status push failed: %s", esp_err_to_name(err));
+        ESP_LOGW(TAG, "Firebase location push failed: %s", esp_err_to_name(err));
     }
     esp_http_client_cleanup(client);
     return err == ESP_OK;
 }
 
+// A single ESP32 doing CSI sensing has no true x/y position, so located/x/y
+// stay honest placeholders here (false/null) rather than faking coordinates
+// — matching what firmware/nanny-bot/README.md already tells users to expect.
 static void push_status_to_firebase(void) {
     cJSON *root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "event", "status");
     cJSON_AddBoolToObject(root, "online", true);
+    cJSON_AddBoolToObject(root, "located", false);
+    cJSON_AddNullToObject(root, "x");
+    cJSON_AddNullToObject(root, "y");
+    cJSON_AddNumberToObject(root, "anchorsSeen", 0);
+    cJSON_AddNumberToObject(root, "batteryPercent", -1);
+    cJSON_AddStringToObject(root, "event", last_event);
     cJSON_AddStringToObject(root, "mode", mode_name(mode));
-    cJSON_AddBoolToObject(root, "baselineReady", baseline_ready);
-    cJSON_AddBoolToObject(root, "gaitReady", gait_ready);
     cJSON_AddNumberToObject(root, "roomFrames", room_frames);
     cJSON_AddNumberToObject(root, "roomTotal", ROOM_BASELINE_FRAMES);
     cJSON_AddNumberToObject(root, "gaitFrames", gait_frames);
@@ -723,15 +740,9 @@ static void push_status_to_firebase(void) {
     char *body = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (body) {
-        firebase_patch_status(body);
+        firebase_patch_location(body);
         cJSON_free(body);
     }
-}
-
-// Called right when a fall alert fires so the phone finds out within
-// seconds, without waiting for (or being overwritten by) the periodic push.
-static void push_fall_alert_to_firebase(void) {
-    firebase_patch_status("{\"lastFallAlertAt\":{\".sv\":\"timestamp\"}}");
 }
 
 static void firebase_push_task(void *arg) {
@@ -782,7 +793,7 @@ static void send_fall_alert(void) {
     ESP_LOGW(TAG, "POSSIBLE FALL ALERT: sudden enrolled-area CSI disturbance detected");
     emit_appdata("fall-alert");
 #if HAVE_FIREBASE_SECRETS
-    push_fall_alert_to_firebase();
+    push_status_to_firebase();
 #endif
     pulse_alert(4);
     ignore_until_us = esp_timer_get_time() + ((int64_t)SETTLE_AFTER_MOVE_MS * 2500);

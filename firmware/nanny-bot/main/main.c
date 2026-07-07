@@ -12,6 +12,7 @@
 #include "esp_event.h"
 #include "esp_http_server.h"
 #include "esp_http_client.h"
+#include "mdns.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_timer.h"
@@ -707,6 +708,21 @@ static void init_wifi(void) {
     }
 }
 
+// Advertises the robot as http://mynanny.local so the phone app can find it
+// by a fixed name instead of guessing whatever IP DHCP handed out this time
+// (the ESP32's address changes across reboots/networks; the hostname doesn't).
+static void start_mdns(void) {
+    esp_err_t err = mdns_init();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "mDNS init failed (%s); phone app will need the robot's IP directly", esp_err_to_name(err));
+        return;
+    }
+    mdns_hostname_set("mynanny");
+    mdns_instance_name_set("MyNanny Rover");
+    mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+    ESP_LOGI(TAG, "mDNS ready: http://mynanny.local/api/robot-location");
+}
+
 static void start_robot_http_server(void) {
     if (robot_http_server) {
         return;
@@ -722,6 +738,8 @@ static void start_robot_http_server(void) {
         robot_http_server = NULL;
         return;
     }
+
+    start_mdns();
 
     httpd_uri_t location_get = {
         .uri = "/api/robot-location",

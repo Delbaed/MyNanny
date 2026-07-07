@@ -24,14 +24,23 @@ The GPS panel uses the browser/device location from the laptop or phone running 
 
 After this firmware is flashed once over USB, the rover can run from battery without staying plugged into the laptop.
 
-The ESP32 hosts its own WiFi API while connected to `Dogpatch`:
+The ESP32 hosts its own WiFi API while connected to `Dogpatch`, and advertises
+itself via mDNS so you don't need to look up its IP address:
 
 ```text
-http://<esp32-ip>/api/robot-location
-http://<esp32-ip>/api/command
+http://mynanny.local/api/robot-location
+http://mynanny.local/api/command
 ```
 
-The app first tries the local USB bridge, then tries the rover WiFi API. The USB serial bridge is now only for debugging; movement, imprinting, and fall detection run directly on the ESP32.
+(If mDNS doesn't resolve on a given phone/network — this can happen on some
+Android setups — find the ESP32's actual IP from the Serial Monitor at boot
+and set `EXPO_PUBLIC_ROBOT_API_URL` in `app/.env` to
+`http://<that-ip>/api/robot-location` instead.)
+
+The app first tries the local USB bridge, then `mynanny.local`, then falls
+back to Firebase if `main/secrets.h` is configured. The USB serial bridge is
+now only for debugging; movement, imprinting, and fall detection run
+directly on the ESP32.
 
 Keep the Windows hotspot named `Dogpatch` running on 2.4 GHz. The ESP32 connects to that WiFi, CSI is enabled in the firmware, and the app can read the ESP32 over WiFi when the rover is running from battery.
 

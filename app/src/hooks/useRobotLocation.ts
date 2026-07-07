@@ -23,13 +23,17 @@ export function useRobotLocation(deviceId: string): RobotLocationState {
     let unsubscribe = () => {};
     let interval: ReturnType<typeof setInterval> | null = null;
 
+    // The robot now advertises itself via mDNS (see start_mdns() in
+    // firmware/nanny-bot/main/main.c), so "mynanny.local" resolves to
+    // whatever IP it currently has — no more guessing/hardcoding an IP that
+    // breaks the next time DHCP hands out a different one. EXPO_PUBLIC_ROBOT_API_URL
+    // is still there as an escape hatch if mDNS resolution doesn't work on a
+    // given phone/network (notably some Android setups).
     const robotUrls = [
       process.env.EXPO_PUBLIC_ROBOT_API_URL,
       process.env.EXPO_PUBLIC_LOCAL_BRIDGE_URL,
       'http://127.0.0.1:8080/api/robot-location',
       'http://mynanny.local/api/robot-location',
-      'http://192.168.137.18/api/robot-location',
-      'http://192.168.137.248/api/robot-location',
     ].filter(Boolean) as string[];
 
     const readRobotApi = async () => {

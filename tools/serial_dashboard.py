@@ -39,6 +39,7 @@ state = {
     "gaitTotal": 140,
     "gaitSamples": 0,
     "activeTriggers": 0,
+    "fallAlerts": 0,
     "location": {
         "enabled": False,
         "lat": None,
@@ -161,6 +162,11 @@ APP_HTML = """<!doctype html>
     }
     .pill.connected { color: var(--green); }
     .pill.waiting { color: var(--amber); }
+    .pill.alerting {
+      color: var(--red);
+      border-color: #f0b5ae;
+      background: #fff4f2;
+    }
     .layout {
       display: grid;
       grid-template-columns: minmax(0, 1.3fr) minmax(280px, 0.7fr);
@@ -276,6 +282,17 @@ APP_HTML = """<!doctype html>
       background: #fbfcfe;
       min-height: 72px;
     }
+    .fall-panel {
+      border-color: #f0b5ae;
+      background: #fffafa;
+    }
+    .fall-panel.active {
+      border-color: var(--red);
+      box-shadow: 0 0 0 3px rgba(180, 35, 24, 0.12), var(--shadow);
+    }
+    .alert-text {
+      color: var(--red);
+    }
     .field {
       display: grid;
       gap: 6px;
@@ -332,8 +349,8 @@ APP_HTML = """<!doctype html>
               <div id="triggers" class="value">0</div>
             </div>
             <div class="metric">
-              <div class="label">Gait samples</div>
-              <div id="samples" class="value">0</div>
+              <div class="label">Fall alerts</div>
+              <div id="fallAlerts" class="value alert-text">0</div>
             </div>
           </div>
           <div class="rows">
@@ -357,6 +374,25 @@ APP_HTML = """<!doctype html>
       </div>
 
       <aside class="stack">
+        <div id="fallPanel" class="panel fall-panel">
+          <div class="label">Parent alert</div>
+          <div id="fallStatus" class="value" style="font-size:18px">No fall alert</div>
+          <div class="location-grid">
+            <div class="location-readout">
+              <div class="label">Gait samples</div>
+              <div id="samples" class="value" style="font-size:16px">0</div>
+            </div>
+            <div class="location-readout">
+              <div class="label">Browser notifications</div>
+              <div id="notifyStatus" class="value" style="font-size:16px">Off</div>
+            </div>
+          </div>
+          <div class="actions" style="margin-top:10px">
+            <button id="enableAlerts" class="primary">Enable parent alerts</button>
+            <button id="testParentAlert">Test alert</button>
+          </div>
+        </div>
+
         <div class="panel">
           <div class="label">Onboarding</div>
           <div class="actions">
@@ -411,6 +447,8 @@ APP_HTML = """<!doctype html>
   <script>
     const $ = (id) => document.getElementById(id);
     const LOCATION_STORAGE_KEY = "mynanny.homeLocation";
+    let lastFallAlerts = 0;
+    let parentAlertsEnabled = false;
     let latestPosition = null;
     let gpsWatchId = null;
 
@@ -502,6 +540,46 @@ APP_HTML = """<!doctype html>
       }
     }
 
+    function notificationPermission() {
+      if (!("Notification" in window)) return "unsupported";
+      return Notification.permission;
+    }
+
+    function updateNotifyStatus() {
+      const permission = notificationPermission();
+      if (permission === "granted" && parentAlertsEnabled) {
+        setText("notifyStatus", "On");
+      } else if (permission === "denied") {
+        setText("notifyStatus", "Blocked");
+      } else if (permission === "unsupported") {
+        setText("notifyStatus", "Unsupported");
+      } else {
+        setText("notifyStatus", "Off");
+      }
+    }
+
+    function sendParentNotification(message) {
+      if (notificationPermission() === "granted" && parentAlertsEnabled) {
+        new Notification("MyNanny fall alert", { body: message });
+      }
+    }
+
+    function renderFallAlert(data) {
+      const fallAlerts = Number(data.fallAlerts || 0);
+      const isNewAlert = fallAlerts > lastFallAlerts;
+      const currentlyAlerting = data.event === "fall-alert" || fallAlerts > 0;
+
+      setText("fallAlerts", fallAlerts);
+      $("fallPanel").classList.toggle("active", currentlyAlerting);
+      setText("fallStatus", currentlyAlerting ? "Possible fall detected" : "No fall alert");
+
+      if (isNewAlert || data.event === "fall-alert") {
+        sendParentNotification("Possible fall detected from the imprinted child movement pattern.");
+      }
+      lastFallAlerts = Math.max(lastFallAlerts, fallAlerts);
+      updateNotifyStatus();
+    }
+
     function render(data) {
       const connected = Boolean(data.connected);
       const roomPct = percent(data.roomFrames, data.roomTotal);
@@ -521,6 +599,7 @@ APP_HTML = """<!doctype html>
       setText("serialLine", data.lastLine || "");
       setText("details", "Last update " + age + "s ago" + (data.lastCommand ? " | last command: " + data.lastCommand : ""));
       renderLocation(data.location);
+      renderFallAlert(data);
     }
 
     async function refresh() {
@@ -548,6 +627,24 @@ APP_HTML = """<!doctype html>
 
     document.querySelectorAll("[data-command]").forEach((button) => {
       button.addEventListener("click", () => sendCommand(button.dataset.command, button));
+    });
+
+    $("enableAlerts").addEventListener("click", async () => {
+      if (!("Notification" in window)) {
+        parentAlertsEnabled = false;
+        updateNotifyStatus();
+        return;
+      }
+      const permission = await Notification.requestPermission();
+      parentAlertsEnabled = permission === "granted";
+      updateNotifyStatus();
+    });
+
+    $("testParentAlert").addEventListener("click", () => {
+      parentAlertsEnabled = notificationPermission() === "granted" || parentAlertsEnabled;
+      sendParentNotification("Test alert from MyNanny.");
+      setText("fallStatus", "Test alert sent");
+      updateNotifyStatus();
     });
 
     $("startGps").addEventListener("click", async () => {

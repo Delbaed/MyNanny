@@ -57,6 +57,11 @@
 #define MIN_GAIT_SAMPLE_CHANGE 0.006f
 #define TRIGGER_FRAMES 4
 
+// Prototype fall alert: sudden CSI disturbance after child imprinting.
+#define FALL_CHANGE_THRESHOLD 0.055f
+#define FALL_MOTION_THRESHOLD 0.024f
+#define FALL_TRIGGER_FRAMES 2
+
 // Gait tolerances. Bigger means less strict matching.
 #define GAIT_MOTION_FLOOR 0.018f
 #define GAIT_CHANGE_FLOOR 0.026f
@@ -124,7 +129,9 @@ static int room_frames = 0;
 static int gait_frames = 0;
 static int gait_sample_count = 0;
 static int active_child_like_frames = 0;
+static int active_fall_like_frames = 0;
 static int active_trigger_count = 0;
+static int fall_alert_count = 0;
 static int64_t ignore_until_us = 0;
 
 static float gait_motion_mean = 0.0f;
@@ -207,7 +214,7 @@ static void emit_appdata(const char *event) {
         "APPDATA {\"event\":\"%s\",\"mode\":\"%s\",\"baselineReady\":%d,"
         "\"gaitReady\":%d,\"roomFrames\":%d,\"roomTotal\":%d,"
         "\"gaitFrames\":%d,\"gaitTotal\":%d,\"gaitSamples\":%d,"
-        "\"activeTriggers\":%d}\n",
+        "\"activeTriggers\":%d,\"fallAlerts\":%d}\n",
         event,
         mode_name(mode),
         baseline_ready,
@@ -217,7 +224,8 @@ static void emit_appdata(const char *event) {
         gait_frames,
         GAIT_ENROLL_FRAMES,
         gait_sample_count,
-        active_trigger_count
+        active_trigger_count,
+        fall_alert_count
     );
 }
 
@@ -276,7 +284,9 @@ static void start_room_onboarding(bool also_relearn_gait) {
     memset(baseline, 0, sizeof(baseline));
     room_frames = 0;
     active_child_like_frames = 0;
+    active_fall_like_frames = 0;
     active_trigger_count = 0;
+    fall_alert_count = 0;
     baseline_ready = false;
     require_gait_after_baseline = also_relearn_gait;
     mode = MODE_ROOM_BASELINE;
@@ -293,6 +303,7 @@ static void start_gait_onboarding(void) {
     gait_frames = 0;
     gait_sample_count = 0;
     active_child_like_frames = 0;
+    active_fall_like_frames = 0;
     gait_ready = false;
     mode = MODE_GAIT_ENROLL;
     ignore_until_us = 0;
@@ -305,6 +316,7 @@ static void enter_active_mode(void) {
     motors_stop();
     mode = MODE_ACTIVE;
     active_child_like_frames = 0;
+    active_fall_like_frames = 0;
     ignore_until_us = esp_timer_get_time() + 800000;
     ESP_LOGI(TAG,
              "ACTIVE: gait motion mean=%.3f std=%.3f, change mean=%.3f std=%.3f",
@@ -569,6 +581,27 @@ static bool looks_like_enrolled_gait(float baseline_distance, float motion, cons
     return (motion_match && change_match) || shape_match;
 }
 
+static bool looks_like_possible_fall(float baseline_distance, float motion) {
+    if (!gait_ready) {
+        return false;
+    }
+
+    float learned_change_limit = gait_change_mean + max_float(FALL_CHANGE_THRESHOLD, gait_change_std * 3.2f);
+    float learned_motion_limit = gait_motion_mean + max_float(FALL_MOTION_THRESHOLD, gait_motion_std * 3.2f);
+
+    return baseline_distance > learned_change_limit || motion > learned_motion_limit;
+}
+
+static void send_fall_alert(void) {
+    fall_alert_count++;
+    active_fall_like_frames = 0;
+    motors_stop();
+    ESP_LOGW(TAG, "POSSIBLE FALL ALERT: sudden enrolled-area CSI disturbance detected");
+    emit_appdata("fall-alert");
+    pulse_alert(4);
+    ignore_until_us = esp_timer_get_time() + ((int64_t)SETTLE_AFTER_MOVE_MS * 2500);
+}
+
 static void movement_burst(int trigger_count) {
     ESP_LOGW(TAG, "Enrolled child-like WiFi movement detected; moving briefly");
     pulse_alert(1);
@@ -677,6 +710,13 @@ static void active_follow_logic(const csi_feature_t *f) {
         f->motion,
         f->bins
     );
+    bool fall_like = significant_change && looks_like_possible_fall(baseline_distance, f->motion);
+
+    if (fall_like) {
+        active_fall_like_frames++;
+    } else if (active_fall_like_frames > 0) {
+        active_fall_like_frames--;
+    }
 
     if (gait_like) {
         active_child_like_frames++;
@@ -690,13 +730,20 @@ static void active_follow_logic(const csi_feature_t *f) {
     }
 
     ESP_LOGI(TAG,
-             "active rssi=%d change=%.3f motion=%.3f significant=%d gaitLike=%d frames=%d",
+             "active rssi=%d change=%.3f motion=%.3f significant=%d gaitLike=%d fallLike=%d frames=%d fallFrames=%d",
              f->rssi,
              baseline_distance,
              f->motion,
              significant_change,
              gait_like,
-             active_child_like_frames);
+             fall_like,
+             active_child_like_frames,
+             active_fall_like_frames);
+
+    if (active_fall_like_frames >= FALL_TRIGGER_FRAMES) {
+        send_fall_alert();
+        return;
+    }
 
     if (active_child_like_frames >= TRIGGER_FRAMES) {
         active_child_like_frames = 0;

@@ -28,6 +28,7 @@ export function useRobotLocation(deviceId: string): RobotLocationState {
       process.env.EXPO_PUBLIC_LOCAL_BRIDGE_URL,
       'http://127.0.0.1:8080/api/robot-location',
       'http://mynanny.local/api/robot-location',
+      'http://192.168.137.18/api/robot-location',
       'http://192.168.137.248/api/robot-location',
     ].filter(Boolean) as string[];
 

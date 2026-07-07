@@ -2,10 +2,16 @@ import React from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { colors, spacing } from '../theme';
 import { useRobotLocation } from '../hooks/useRobotLocation';
+import { useRobotStatus } from '../hooks/useRobotStatus';
 import { useSettings } from '../hooks/useSettings';
 import { StatusCard } from '../components/StatusCard';
 import { PositionMap } from '../components/PositionMap';
+import { CsiStatusCard } from '../components/CsiStatusCard';
 import { AlertBanner } from '../components/AlertBanner';
+
+// A recent fall alert stays visible in the banner for this long after it
+// fires (lastFallAlertAt is a one-way counter timestamp, not "acknowledged").
+const RECENT_FALL_ALERT_MS = 60_000;
 
 function isInsideSafeZone(
   x: number | null,
@@ -21,10 +27,16 @@ function isInsideSafeZone(
 export function DashboardScreen() {
   const { settings, loaded } = useSettings();
   const { location, loading, error, isStale } = useRobotLocation(settings.deviceId);
+  const { status: csiStatus, isStale: csiIsStale } = useRobotStatus(settings.deviceId);
 
   const insideSafeZone = location
     ? isInsideSafeZone(location.x, location.y, settings.safeZone)
     : true;
+
+  const hasRecentFallAlert =
+    !!csiStatus?.lastFallAlertAt &&
+    !csiIsStale &&
+    Date.now() - csiStatus.lastFallAlertAt < RECENT_FALL_ALERT_MS;
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
@@ -37,6 +49,9 @@ export function DashboardScreen() {
       )}
       {!error && location?.located && !insideSafeZone && !isStale && (
         <AlertBanner tone="danger" message="Child has left the safe zone!" />
+      )}
+      {hasRecentFallAlert && (
+        <AlertBanner tone="danger" message="Possible fall detected — check on them." />
       )}
 
       <StatusCard location={location} isStale={isStale} />
@@ -58,6 +73,10 @@ export function DashboardScreen() {
           No data yet for this robot. Make sure it's powered on and connected to Wi-Fi.
         </Text>
       )}
+
+      <View style={{ height: spacing.md }} />
+
+      <CsiStatusCard status={csiStatus} isStale={csiIsStale} />
     </ScrollView>
   );
 }

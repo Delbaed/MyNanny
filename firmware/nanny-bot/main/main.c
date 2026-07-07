@@ -2,11 +2,15 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
+#include "cJSON.h"
 #include "driver/gpio.h"
 #include "driver/uart.h"
+#include "esp_crt_bundle.h"
 #include "esp_event.h"
+#include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_timer.h"
@@ -35,6 +39,22 @@
 
 #define WIFI_SSID "Dogpatch"
 #define WIFI_PASS "Community25!"
+
+// Optional: copy main/secrets.h.example to main/secrets.h (gitignored) and
+// fill in Firebase details to push status over WiFi, so the phone app can
+// see it with no USB/laptop connection. Without secrets.h this is a no-op —
+// CSI onboarding/following and the USB serial dashboard behave exactly as
+// before.
+#if __has_include("secrets.h")
+#include "secrets.h"
+#define HAVE_FIREBASE_SECRETS 1
+#else
+#define HAVE_FIREBASE_SECRETS 0
+#endif
+
+// How often to push a status snapshot to Firebase. Kept infrequent and on
+// its own task so it never blocks CSI frame processing.
+#define FIREBASE_PUSH_INTERVAL_MS 3000
 
 #define CSI_BINS 16
 #define ROOM_BASELINE_FRAMES 90
@@ -144,6 +164,13 @@ static running_stats_t gait_change_stats;
 
 static system_mode_t mode = MODE_ROOM_BASELINE;
 static volatile command_request_t pending_command = CMD_NONE;
+
+#if HAVE_FIREBASE_SECRETS
+static char cached_id_token[1400];
+static int64_t id_token_expires_at_us = 0;
+static char http_response_buf[1600];
+static int http_response_len = 0;
+#endif
 
 static float max_float(float a, float b) {
     return a > b ? a : b;
@@ -564,6 +591,162 @@ static void init_wifi(void) {
     }
 }
 
+#if HAVE_FIREBASE_SECRETS
+
+static esp_err_t http_event_handler(esp_http_client_event_t *evt) {
+    if (evt->event_id == HTTP_EVENT_ON_DATA) {
+        int copy_len = evt->data_len;
+        int remaining = (int)sizeof(http_response_buf) - http_response_len - 1;
+        if (copy_len > remaining) {
+            copy_len = remaining;
+        }
+        if (copy_len > 0) {
+            memcpy(http_response_buf + http_response_len, evt->data, copy_len);
+            http_response_len += copy_len;
+            http_response_buf[http_response_len] = '\0';
+        }
+    }
+    return ESP_OK;
+}
+
+static bool refresh_id_token(void) {
+    http_response_len = 0;
+    http_response_buf[0] = '\0';
+
+    esp_http_client_config_t config = {
+        .url = "https://securetoken.googleapis.com/v1/token?key=" FIREBASE_API_KEY,
+        .method = HTTP_METHOD_POST,
+        .event_handler = http_event_handler,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .timeout_ms = 8000,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (!client) {
+        return false;
+    }
+
+    char body[300];
+    snprintf(body, sizeof(body), "grant_type=refresh_token&refresh_token=%s", FIREBASE_REFRESH_TOKEN);
+    esp_http_client_set_header(client, "Content-Type", "application/x-www-form-urlencoded");
+    esp_http_client_set_post_field(client, body, (int)strlen(body));
+
+    esp_err_t err = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+
+    if (err != ESP_OK || status != 200) {
+        ESP_LOGW(TAG, "Firebase token refresh failed: err=%s status=%d", esp_err_to_name(err), status);
+        return false;
+    }
+
+    cJSON *json = cJSON_Parse(http_response_buf);
+    if (!json) {
+        return false;
+    }
+
+    bool ok = false;
+    cJSON *id_token = cJSON_GetObjectItem(json, "id_token");
+    cJSON *expires_in = cJSON_GetObjectItem(json, "expires_in");
+    if (cJSON_IsString(id_token) && id_token->valuestring) {
+        strncpy(cached_id_token, id_token->valuestring, sizeof(cached_id_token) - 1);
+        cached_id_token[sizeof(cached_id_token) - 1] = '\0';
+
+        long expires_sec = 3300;
+        if (cJSON_IsString(expires_in) && expires_in->valuestring) {
+            expires_sec = atol(expires_in->valuestring);
+        }
+        int64_t margin_sec = expires_sec > 60 ? expires_sec - 60 : expires_sec;
+        id_token_expires_at_us = esp_timer_get_time() + margin_sec * 1000000LL;
+        ok = true;
+    }
+
+    cJSON_Delete(json);
+    return ok;
+}
+
+static bool ensure_fresh_id_token(void) {
+    if (cached_id_token[0] != '\0' && esp_timer_get_time() < id_token_expires_at_us) {
+        return true;
+    }
+    return refresh_id_token();
+}
+
+// PATCHes (partial update, not overwrite) robots/<DEVICE_ID>/status.json so
+// concurrent callers (periodic status vs. an immediate fall-alert ping)
+// never clobber each other's fields.
+static bool firebase_patch_status(const char *json_body) {
+    if (!ensure_fresh_id_token()) {
+        return false;
+    }
+
+    char url[1700];
+    snprintf(url, sizeof(url), "https://%s/robots/%s/status.json?auth=%s", FIREBASE_HOST, DEVICE_ID, cached_id_token);
+
+    esp_http_client_config_t config = {
+        .url = url,
+        .method = HTTP_METHOD_PATCH,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .timeout_ms = 8000,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (!client) {
+        return false;
+    }
+
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+    esp_http_client_set_post_field(client, json_body, (int)strlen(json_body));
+    esp_err_t err = esp_http_client_perform(client);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Firebase status push failed: %s", esp_err_to_name(err));
+    }
+    esp_http_client_cleanup(client);
+    return err == ESP_OK;
+}
+
+static void push_status_to_firebase(void) {
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "event", "status");
+    cJSON_AddBoolToObject(root, "online", true);
+    cJSON_AddStringToObject(root, "mode", mode_name(mode));
+    cJSON_AddBoolToObject(root, "baselineReady", baseline_ready);
+    cJSON_AddBoolToObject(root, "gaitReady", gait_ready);
+    cJSON_AddNumberToObject(root, "roomFrames", room_frames);
+    cJSON_AddNumberToObject(root, "roomTotal", ROOM_BASELINE_FRAMES);
+    cJSON_AddNumberToObject(root, "gaitFrames", gait_frames);
+    cJSON_AddNumberToObject(root, "gaitTotal", GAIT_ENROLL_FRAMES);
+    cJSON_AddNumberToObject(root, "gaitSamples", gait_sample_count);
+    cJSON_AddNumberToObject(root, "activeTriggers", active_trigger_count);
+    cJSON_AddNumberToObject(root, "fallAlerts", fall_alert_count);
+    cJSON *updated_at = cJSON_AddObjectToObject(root, "updatedAt");
+    cJSON_AddStringToObject(updated_at, ".sv", "timestamp");
+
+    char *body = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (body) {
+        firebase_patch_status(body);
+        cJSON_free(body);
+    }
+}
+
+// Called right when a fall alert fires so the phone finds out within
+// seconds, without waiting for (or being overwritten by) the periodic push.
+static void push_fall_alert_to_firebase(void) {
+    firebase_patch_status("{\"lastFallAlertAt\":{\".sv\":\"timestamp\"}}");
+}
+
+static void firebase_push_task(void *arg) {
+    while (true) {
+        if ((xEventGroupGetBits(wifi_events) & WIFI_CONNECTED_BIT) == 0) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
+        push_status_to_firebase();
+        vTaskDelay(pdMS_TO_TICKS(FIREBASE_PUSH_INTERVAL_MS));
+    }
+}
+
+#endif // HAVE_FIREBASE_SECRETS
+
 static bool looks_like_enrolled_gait(float baseline_distance, float motion, const float *bins) {
     if (!gait_ready) {
         return baseline_distance > CHANGE_THRESHOLD || motion > MOTION_THRESHOLD;
@@ -598,6 +781,9 @@ static void send_fall_alert(void) {
     motors_stop();
     ESP_LOGW(TAG, "POSSIBLE FALL ALERT: sudden enrolled-area CSI disturbance detected");
     emit_appdata("fall-alert");
+#if HAVE_FIREBASE_SECRETS
+    push_fall_alert_to_firebase();
+#endif
     pulse_alert(4);
     ignore_until_us = esp_timer_get_time() + ((int64_t)SETTLE_AFTER_MOVE_MS * 2500);
 }
@@ -838,6 +1024,12 @@ void app_main(void) {
     xTaskCreate(serial_command_task, "serial_command_task", 4096, NULL, 3, NULL);
 
     init_wifi();
+
+#if HAVE_FIREBASE_SECRETS
+    xTaskCreate(firebase_push_task, "firebase_push_task", 12288, NULL, 3, NULL);
+#else
+    ESP_LOGI(TAG, "No main/secrets.h found; skipping Firebase push (USB serial dashboard still works).");
+#endif
 
     if (csi_ready) {
         start_room_onboarding(true);

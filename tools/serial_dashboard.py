@@ -39,6 +39,19 @@ state = {
     "gaitTotal": 140,
     "gaitSamples": 0,
     "activeTriggers": 0,
+    "location": {
+        "enabled": False,
+        "lat": None,
+        "lon": None,
+        "accuracy": None,
+        "homeLat": None,
+        "homeLon": None,
+        "safeRadiusM": 25,
+        "distanceFromHomeM": None,
+        "insideSafeZone": None,
+        "updatedAt": 0,
+        "status": "not-started",
+    },
 }
 
 
@@ -250,6 +263,31 @@ APP_HTML = """<!doctype html>
     .movement button:nth-child(2) { grid-column: 1; }
     .movement button:nth-child(3) { grid-column: 2; }
     .movement button:nth-child(4) { grid-column: 3; }
+    .location-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .location-readout {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #fbfcfe;
+      min-height: 72px;
+    }
+    .field {
+      display: grid;
+      gap: 6px;
+      margin-top: 10px;
+    }
+    input {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 10px 11px;
+      font: inherit;
+    }
     code {
       display: block;
       background: #111827;
@@ -340,6 +378,29 @@ APP_HTML = """<!doctype html>
         </div>
 
         <div class="panel">
+          <div class="label">GPS safe zone</div>
+          <div id="gpsStatus" class="value" style="font-size:18px">Not started</div>
+          <div class="location-grid">
+            <div class="location-readout">
+              <div class="label">Coordinates</div>
+              <div id="gpsCoords" class="value" style="font-size:16px">--</div>
+            </div>
+            <div class="location-readout">
+              <div class="label">Home distance</div>
+              <div id="gpsDistance" class="value" style="font-size:16px">--</div>
+            </div>
+          </div>
+          <div class="field">
+            <label class="label" for="safeRadius">Safe radius, meters</label>
+            <input id="safeRadius" type="number" min="5" max="500" step="5" value="25">
+          </div>
+          <div class="actions" style="margin-top:10px">
+            <button id="startGps" class="primary">Start GPS</button>
+            <button id="setHome">Set home here</button>
+          </div>
+        </div>
+
+        <div class="panel">
           <div class="label">Connection</div>
           <div id="details" class="value" style="font-size:16px">Starting...</div>
         </div>
@@ -349,6 +410,9 @@ APP_HTML = """<!doctype html>
 
   <script>
     const $ = (id) => document.getElementById(id);
+    const LOCATION_STORAGE_KEY = "mynanny.homeLocation";
+    let latestPosition = null;
+    let gpsWatchId = null;
 
     function percent(value, total) {
       const safeTotal = Math.max(1, Number(total || 1));
@@ -357,6 +421,85 @@ APP_HTML = """<!doctype html>
 
     function setText(id, value) {
       $(id).textContent = value == null ? "" : String(value);
+    }
+
+    function formatCoord(value) {
+      return Number.isFinite(value) ? value.toFixed(6) : "--";
+    }
+
+    function distanceMeters(aLat, aLon, bLat, bLon) {
+      if (![aLat, aLon, bLat, bLon].every(Number.isFinite)) return null;
+      const earthRadiusM = 6371000;
+      const toRad = (deg) => deg * Math.PI / 180;
+      const dLat = toRad(bLat - aLat);
+      const dLon = toRad(bLon - aLon);
+      const lat1 = toRad(aLat);
+      const lat2 = toRad(bLat);
+      const h = Math.sin(dLat / 2) ** 2 +
+        Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+      return 2 * earthRadiusM * Math.asin(Math.sqrt(h));
+    }
+
+    function savedHome() {
+      try {
+        const raw = localStorage.getItem(LOCATION_STORAGE_KEY);
+        return raw ? JSON.parse(raw) : {};
+      } catch {
+        return {};
+      }
+    }
+
+    function saveHome(lat, lon) {
+      localStorage.setItem(LOCATION_STORAGE_KEY, JSON.stringify({ lat, lon }));
+    }
+
+    async function postLocation(status, position) {
+      const home = savedHome();
+      const safeRadiusM = Math.max(5, Number($("safeRadius").value || 25));
+      const lat = position ? position.coords.latitude : null;
+      const lon = position ? position.coords.longitude : null;
+      const accuracy = position ? position.coords.accuracy : null;
+      const distance = distanceMeters(lat, lon, Number(home.lat), Number(home.lon));
+
+      await fetch("/api/location", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          enabled: Boolean(position),
+          lat,
+          lon,
+          accuracy,
+          homeLat: Number.isFinite(Number(home.lat)) ? Number(home.lat) : null,
+          homeLon: Number.isFinite(Number(home.lon)) ? Number(home.lon) : null,
+          safeRadiusM,
+          distanceFromHomeM: distance,
+          insideSafeZone: distance == null ? null : distance <= safeRadiusM,
+          status
+        })
+      });
+    }
+
+    function renderLocation(location) {
+      const loc = location || {};
+      const lat = Number(loc.lat);
+      const lon = Number(loc.lon);
+      const accuracy = Number(loc.accuracy);
+      const distance = Number(loc.distanceFromHomeM);
+      const radius = Number(loc.safeRadiusM || $("safeRadius").value || 25);
+      const hasCoords = loc.lat != null && loc.lon != null && Number.isFinite(lat) && Number.isFinite(lon);
+      const hasDistance = loc.distanceFromHomeM != null && Number.isFinite(distance);
+
+      if (Number.isFinite(radius)) $("safeRadius").value = String(Math.round(radius));
+      setText("gpsCoords", hasCoords ? `${formatCoord(lat)}, ${formatCoord(lon)}` : "--");
+      setText("gpsDistance", hasDistance ? `${Math.round(distance)} m / ${Math.round(radius)} m` : "--");
+
+      if (loc.insideSafeZone === true) {
+        setText("gpsStatus", `Inside safe zone${Number.isFinite(accuracy) ? " | +/- " + Math.round(accuracy) + " m" : ""}`);
+      } else if (loc.insideSafeZone === false) {
+        setText("gpsStatus", `Outside safe zone${Number.isFinite(accuracy) ? " | +/- " + Math.round(accuracy) + " m" : ""}`);
+      } else {
+        setText("gpsStatus", loc.status || "Not started");
+      }
     }
 
     function render(data) {
@@ -377,6 +520,7 @@ APP_HTML = """<!doctype html>
       $("gaitFill").style.width = gaitPct + "%";
       setText("serialLine", data.lastLine || "");
       setText("details", "Last update " + age + "s ago" + (data.lastCommand ? " | last command: " + data.lastCommand : ""));
+      renderLocation(data.location);
     }
 
     async function refresh() {
@@ -406,6 +550,44 @@ APP_HTML = """<!doctype html>
       button.addEventListener("click", () => sendCommand(button.dataset.command, button));
     });
 
+    $("startGps").addEventListener("click", async () => {
+      if (!navigator.geolocation) {
+        await postLocation("gps-unavailable", null);
+        await refresh();
+        return;
+      }
+
+      $("startGps").disabled = true;
+      gpsWatchId = navigator.geolocation.watchPosition(
+        async (position) => {
+          latestPosition = position;
+          await postLocation("gps-active", position);
+          await refresh();
+          $("startGps").disabled = false;
+        },
+        async (error) => {
+          await postLocation("gps-error: " + error.message, null);
+          await refresh();
+          $("startGps").disabled = false;
+        },
+        { enableHighAccuracy: true, maximumAge: 2000, timeout: 12000 }
+      );
+    });
+
+    $("setHome").addEventListener("click", async () => {
+      if (!latestPosition) return;
+      saveHome(latestPosition.coords.latitude, latestPosition.coords.longitude);
+      await postLocation("home-set", latestPosition);
+      await refresh();
+    });
+
+    $("safeRadius").addEventListener("change", async () => {
+      if (latestPosition) {
+        await postLocation("safe-radius-updated", latestPosition);
+        await refresh();
+      }
+    });
+
     refresh();
     setInterval(refresh, 1000);
   </script>
@@ -430,6 +612,10 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self):
+        if self.path == "/api/location":
+            self.handle_location_post()
+            return
+
         if self.path != "/api/command":
             self.send_json(404, {"ok": False, "error": "not found"})
             return
@@ -450,6 +636,39 @@ class Handler(BaseHTTPRequestHandler):
         command_queue.put((command, command_char))
         update_state(lastCommand=command)
         self.send_json(200, {"ok": True, "command": command})
+
+    def handle_location_post(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(length) or b"{}")
+        except Exception:
+            self.send_json(400, {"ok": False, "error": "invalid json"})
+            return
+
+        def number_or_none(name):
+            value = payload.get(name)
+            if value is None:
+                return None
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+
+        location = {
+            "enabled": bool(payload.get("enabled")),
+            "lat": number_or_none("lat"),
+            "lon": number_or_none("lon"),
+            "accuracy": number_or_none("accuracy"),
+            "homeLat": number_or_none("homeLat"),
+            "homeLon": number_or_none("homeLon"),
+            "safeRadiusM": number_or_none("safeRadiusM") or 25,
+            "distanceFromHomeM": number_or_none("distanceFromHomeM"),
+            "insideSafeZone": payload.get("insideSafeZone"),
+            "updatedAt": int(time.time()),
+            "status": str(payload.get("status", "gps-updated")),
+        }
+        update_state(location=location)
+        self.send_json(200, {"ok": True, "location": location})
 
     def send_json(self, status, payload):
         body = json.dumps(payload).encode("utf-8")

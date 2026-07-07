@@ -2,7 +2,7 @@
   "rules": {
     "robots": {
       ".read": "auth != null",
-      ".write": "auth != null && auth.uid === 'eRshltIMvmUHzAOq7VD3ZvsRYnX2'"
+      ".write": "auth != null && auth.uid === 'ntQryEk09rbQ779jKjObx7580cu1'"
     }
   }
 }

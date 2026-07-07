@@ -1,0 +1,8 @@
+{
+  "rules": {
+    "robots": {
+      ".read": "auth != null",
+      ".write": "auth != null && auth.uid === 'ntQryEk09rbQ779jKjObx7580cu1'"
+    }
+  }
+}

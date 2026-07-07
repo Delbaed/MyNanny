@@ -10,6 +10,7 @@
 #include "driver/uart.h"
 #include "esp_crt_bundle.h"
 #include "esp_event.h"
+#include "esp_http_server.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -168,6 +169,7 @@ static running_stats_t gait_change_stats;
 
 static system_mode_t mode = MODE_ROOM_BASELINE;
 static volatile command_request_t pending_command = CMD_NONE;
+static httpd_handle_t robot_http_server = NULL;
 
 #if HAVE_FIREBASE_SECRETS
 static char cached_id_token[1400];
@@ -266,6 +268,108 @@ static void emit_appdata(const char *event) {
         active_trigger_count,
         fall_alert_count
     );
+}
+
+static void write_robot_status_json(char *out, size_t out_len) {
+    snprintf(
+        out,
+        out_len,
+        "{\"online\":true,\"located\":true,\"x\":2.5,\"y\":2.5,"
+        "\"anchorsSeen\":1,\"batteryPercent\":-1,\"updatedAt\":%lld,"
+        "\"mode\":\"%s\",\"event\":\"%s\",\"roomFrames\":%d,\"roomTotal\":%d,"
+        "\"gaitFrames\":%d,\"gaitTotal\":%d,\"gaitSamples\":%d,"
+        "\"activeTriggers\":%d,\"fallAlerts\":%d}",
+        (long long)(esp_timer_get_time() / 1000),
+        mode_name(mode),
+#if HAVE_FIREBASE_SECRETS
+        last_event,
+#else
+        "wifi-direct",
+#endif
+        room_frames,
+        ROOM_BASELINE_FRAMES,
+        gait_frames,
+        GAIT_ENROLL_FRAMES,
+        gait_sample_count,
+        active_trigger_count,
+        fall_alert_count
+    );
+}
+
+static void set_cors_headers(httpd_req_t *req) {
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
+}
+
+static esp_err_t options_handler(httpd_req_t *req) {
+    set_cors_headers(req);
+    httpd_resp_set_status(req, "204 No Content");
+    return httpd_resp_send(req, NULL, 0);
+}
+
+static esp_err_t robot_location_handler(httpd_req_t *req) {
+    char body[700];
+    write_robot_status_json(body, sizeof(body));
+    set_cors_headers(req);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, body);
+}
+
+static command_request_t command_from_body(const char *body) {
+    if (strstr(body, "full-onboard") || strstr(body, "\"r\"")) {
+        return CMD_FULL_ONBOARD;
+    }
+    if (strstr(body, "room-baseline") || strstr(body, "\"b\"")) {
+        return CMD_ROOM_RECALIBRATE;
+    }
+    if (strstr(body, "gait-imprint") || strstr(body, "\"g\"")) {
+        return CMD_GAIT_RECALIBRATE;
+    }
+    if (strstr(body, "status") || strstr(body, "\"s\"")) {
+        return CMD_STATUS;
+    }
+    if (strstr(body, "forward") || strstr(body, "\"w\"")) {
+        return CMD_TEST_FORWARD;
+    }
+    if (strstr(body, "left") || strstr(body, "\"a\"")) {
+        return CMD_TEST_LEFT;
+    }
+    if (strstr(body, "right") || strstr(body, "\"d\"")) {
+        return CMD_TEST_RIGHT;
+    }
+    if (strstr(body, "stop") || strstr(body, "\"x\"")) {
+        return CMD_TEST_STOP;
+    }
+    return CMD_NONE;
+}
+
+static esp_err_t robot_command_handler(httpd_req_t *req) {
+    char body[120] = {0};
+    int to_read = req->content_len;
+    if (to_read > (int)sizeof(body) - 1) {
+        to_read = (int)sizeof(body) - 1;
+    }
+    if (to_read > 0) {
+        int got = httpd_req_recv(req, body, to_read);
+        if (got <= 0) {
+            set_cors_headers(req);
+            httpd_resp_set_status(req, "400 Bad Request");
+            return httpd_resp_sendstr(req, "{\"ok\":false}");
+        }
+        body[got] = '\0';
+    }
+
+    command_request_t command = command_from_body(body);
+    set_cors_headers(req);
+    httpd_resp_set_type(req, "application/json");
+    if (command == CMD_NONE) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        return httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"unknown command\"}");
+    }
+
+    pending_command = command;
+    return httpd_resp_sendstr(req, "{\"ok\":true}");
 }
 
 static void motors_stop(void) {
@@ -601,6 +705,65 @@ static void init_wifi(void) {
         ESP_LOGW(TAG, "WiFi did not connect in 20 seconds; serial motor commands still work.");
         ESP_LOGW(TAG, "Edit WIFI_SSID and WIFI_PASS, then flash again for CSI following.");
     }
+}
+
+static void start_robot_http_server(void) {
+    if (robot_http_server) {
+        return;
+    }
+
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.server_port = 80;
+    config.lru_purge_enable = true;
+
+    esp_err_t err = httpd_start(&robot_http_server, &config);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Robot WiFi API did not start: %s", esp_err_to_name(err));
+        robot_http_server = NULL;
+        return;
+    }
+
+    httpd_uri_t location_get = {
+        .uri = "/api/robot-location",
+        .method = HTTP_GET,
+        .handler = robot_location_handler,
+        .user_ctx = NULL,
+    };
+    httpd_register_uri_handler(robot_http_server, &location_get);
+
+    httpd_uri_t state_get = {
+        .uri = "/api/state",
+        .method = HTTP_GET,
+        .handler = robot_location_handler,
+        .user_ctx = NULL,
+    };
+    httpd_register_uri_handler(robot_http_server, &state_get);
+
+    httpd_uri_t command_post = {
+        .uri = "/api/command",
+        .method = HTTP_POST,
+        .handler = robot_command_handler,
+        .user_ctx = NULL,
+    };
+    httpd_register_uri_handler(robot_http_server, &command_post);
+
+    httpd_uri_t command_options = {
+        .uri = "/api/command",
+        .method = HTTP_OPTIONS,
+        .handler = options_handler,
+        .user_ctx = NULL,
+    };
+    httpd_register_uri_handler(robot_http_server, &command_options);
+
+    httpd_uri_t location_options = {
+        .uri = "/api/robot-location",
+        .method = HTTP_OPTIONS,
+        .handler = options_handler,
+        .user_ctx = NULL,
+    };
+    httpd_register_uri_handler(robot_http_server, &location_options);
+
+    ESP_LOGI(TAG, "Robot WiFi API ready on http://<esp32-ip>/api/robot-location");
 }
 
 #if HAVE_FIREBASE_SECRETS
@@ -1045,6 +1208,9 @@ void app_main(void) {
     xTaskCreate(serial_command_task, "serial_command_task", 4096, NULL, 3, NULL);
 
     init_wifi();
+    if (csi_ready) {
+        start_robot_http_server();
+    }
 
 #if HAVE_FIREBASE_SECRETS
     xTaskCreate(firebase_push_task, "firebase_push_task", 12288, NULL, 3, NULL);

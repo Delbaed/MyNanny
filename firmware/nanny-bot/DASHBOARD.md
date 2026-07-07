@@ -20,6 +20,19 @@ Fall alerts are prototype WiFi CSI disturbance alerts. They trigger when the imp
 
 The GPS panel uses the browser/device location from the laptop or phone running the app. The ESP32 does not have true GPS unless a GPS module is added.
 
-Keep the Windows hotspot named `Dogpatch` running on 2.4 GHz. The ESP32 connects to that WiFi, CSI is enabled in the firmware, and the app reads the ESP32's USB serial data.
+## Battery / Untethered Mode
+
+After this firmware is flashed once over USB, the rover can run from battery without staying plugged into the laptop.
+
+The ESP32 hosts its own WiFi API while connected to `Dogpatch`:
+
+```text
+http://<esp32-ip>/api/robot-location
+http://<esp32-ip>/api/command
+```
+
+The app first tries the local USB bridge, then tries the rover WiFi API. The USB serial bridge is now only for debugging; movement, imprinting, and fall detection run directly on the ESP32.
+
+Keep the Windows hotspot named `Dogpatch` running on 2.4 GHz. The ESP32 connects to that WiFi, CSI is enabled in the firmware, and the app can read the ESP32 over WiFi when the rover is running from battery.
 
 Opening the serial connection can restart the ESP32, so onboarding may begin again when the dashboard starts.

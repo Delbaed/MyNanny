@@ -37,9 +37,9 @@
 #define WIFI_PASS "Community25!"
 
 #define CSI_BINS 16
-#define ROOM_BASELINE_FRAMES 180
-#define GAIT_ENROLL_FRAMES 260
-#define MIN_GAIT_SAMPLES 45
+#define ROOM_BASELINE_FRAMES 90
+#define GAIT_ENROLL_FRAMES 140
+#define MIN_GAIT_SAMPLES 4
 
 // Motor-driver pins. Use a TB6612FNG/L298N/etc. Do not connect motors directly.
 #define LEFT_A GPIO_NUM_4
@@ -51,10 +51,10 @@
 #define ALERT_PIN GPIO_NUM_10
 
 // Tune these by watching Serial Monitor.
-#define CHANGE_THRESHOLD 0.060f
-#define MOTION_THRESHOLD 0.038f
-#define MIN_GAIT_SAMPLE_MOTION 0.018f
-#define MIN_GAIT_SAMPLE_CHANGE 0.030f
+#define CHANGE_THRESHOLD 0.030f
+#define MOTION_THRESHOLD 0.016f
+#define MIN_GAIT_SAMPLE_MOTION 0.003f
+#define MIN_GAIT_SAMPLE_CHANGE 0.006f
 #define TRIGGER_FRAMES 4
 
 // Gait tolerances. Bigger means less strict matching.

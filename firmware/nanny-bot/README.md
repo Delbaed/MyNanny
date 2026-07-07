@@ -52,6 +52,29 @@ idf.py build flash monitor
 Here, `flash` means uploading the firmware to the ESP32. The learned child
 movement profile is still RAM-only and is not written to NVS or stored data.
 
+## Optional: Push Status to the Phone App Over WiFi (No Laptop Needed)
+
+By default the robot only reports state over USB serial to `tools/serial_dashboard.py`
+(see [DASHBOARD.md](DASHBOARD.md)) — that requires the ESP32 tethered to a laptop.
+
+To let the phone app see the robot directly over WiFi instead:
+
+1. Copy `main/secrets.h.example` to `main/secrets.h` (gitignored) and fill in your
+   Firebase project's host, web API key, robot refresh token, and device ID —
+   see the comments in that file, and `include/secrets.h.example` at the repo
+   root for how the robot's pinned Firebase identity was created.
+2. Rebuild and reflash. Every few seconds the robot PATCHes
+   `robots/<DEVICE_ID>/location` in Firebase with its current mode, imprint
+   progress, movement-trigger count, and fall-alert count — the same node and
+   field names `app/src/hooks/useRobotLocation.ts` already falls back to when
+   its local bridge isn't reachable.
+3. Without `main/secrets.h` this is a complete no-op — everything behaves
+   exactly as before (WiFi CSI onboarding/following + the USB serial dashboard).
+
+There's still no real x/y position (a single ESP32 doing CSI sensing can't
+determine that), so `located`/`x`/`y` are pushed as `false`/`null`/`null` —
+honest rather than a faked position.
+
 ## Onboarding Flow
 
 When it starts:

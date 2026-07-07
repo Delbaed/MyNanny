@@ -4,6 +4,7 @@
 .vscode/launch.json
 .vscode/ipch
 include/secrets.h
+firmware/nanny-bot/main/secrets.h
 firebase-debug.log
 .firebase/
 app/expo-start*.log

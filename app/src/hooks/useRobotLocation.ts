@@ -23,30 +23,47 @@ export function useRobotLocation(deviceId: string): RobotLocationState {
     let unsubscribe = () => {};
     let interval: ReturnType<typeof setInterval> | null = null;
 
-    const bridgeUrl =
-      process.env.EXPO_PUBLIC_LOCAL_BRIDGE_URL || 'http://127.0.0.1:8080/api/robot-location';
+    const robotUrls = [
+      process.env.EXPO_PUBLIC_ROBOT_API_URL,
+      process.env.EXPO_PUBLIC_LOCAL_BRIDGE_URL,
+      'http://127.0.0.1:8080/api/robot-location',
+      'http://mynanny.local/api/robot-location',
+      'http://192.168.137.248/api/robot-location',
+    ].filter(Boolean) as string[];
 
-    const readLocalBridge = async () => {
-      const response = await fetch(bridgeUrl);
-      if (!response.ok) {
-        throw new Error(`Local bridge returned ${response.status}`);
+    const readRobotApi = async () => {
+      const errors: string[] = [];
+      for (const url of robotUrls) {
+        try {
+          const response = await fetch(url);
+          if (!response.ok) {
+            throw new Error(`${response.status}`);
+          }
+          const next = (await response.json()) as RobotLocation;
+          if (!next.updatedAt || next.updatedAt < 1_000_000_000_000) {
+            next.updatedAt = Date.now();
+          }
+          if (!stopped) {
+            setLocation(next);
+            setLoading(false);
+            setError(null);
+          }
+          return;
+        } catch (err) {
+          errors.push(`${url}: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
-      const next = (await response.json()) as RobotLocation;
-      if (!stopped) {
-        setLocation(next);
-        setLoading(false);
-        setError(null);
-      }
+      throw new Error(errors.join(' | '));
     };
 
-    readLocalBridge()
+    readRobotApi()
       .then(() => {
-        interval = setInterval(readLocalBridge, 1000);
+        interval = setInterval(readRobotApi, 1000);
       })
       .catch(() => {
         if (!firebaseConfigured || !db) {
           if (!stopped) {
-            setError('Local ESP32 bridge is not running at http://127.0.0.1:8080.');
+            setError('Robot API is not reachable. Power the rover and connect this device to the same Wi-Fi.');
             setLoading(false);
           }
           return;

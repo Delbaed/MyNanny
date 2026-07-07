@@ -14,7 +14,9 @@ Then open:
 http://127.0.0.1:8080
 ```
 
-The app shows live room baseline progress, child imprint progress, active movement triggers, serial logs, and a browser-based GPS safe-zone panel. It also has buttons for full imprinting, status refresh, room-only baseline, child imprint, and basic motor tests.
+The app shows live room baseline progress, child imprint progress, active movement triggers, possible fall alerts, serial logs, and a browser-based GPS safe-zone panel. It also has buttons for full imprinting, status refresh, room-only baseline, child imprint, and basic motor tests.
+
+Fall alerts are prototype WiFi CSI disturbance alerts. They trigger when the imprinted active-mode profile sees a sudden large CSI change. They are not medical-grade fall detection and should not be used as the only child-safety system.
 
 The GPS panel uses the browser/device location from the laptop or phone running the app. The ESP32 does not have true GPS unless a GPS module is added.
 
